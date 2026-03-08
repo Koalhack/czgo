@@ -5,26 +5,15 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Koalhack/czgo/internal/config"
+	"github.com/Koalhack/czgo/internal/template"
+	"github.com/Koalhack/czgo/internal/types"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 )
 
 const maxWidth = 80
-
-var DefaultPrefixes = []huh.Option[string]{
-	huh.NewOption("feat - a new feature", "feat"),
-	huh.NewOption("fix - a bug fix", "fix"),
-	huh.NewOption("build - changes that affect the build system or external dependencies", "build"),
-	huh.NewOption("chore - changes to the build process or auxiliary tools and libraries", "chore"),
-	huh.NewOption("ci - changes to our CI configuration files and scripts", "ci"),
-	huh.NewOption("docs - documentation only changes", "docs"),
-	huh.NewOption("perf - a code change that improves performance", "perf"),
-	huh.NewOption("refactor - a code change that neither fixes a bug nor adds a feature", "refactor"),
-	huh.NewOption("revert - reverts a previous commit", "revert"),
-	huh.NewOption("style - changes that do not affect the meaning of the code", "style"),
-	huh.NewOption("test - adding missing tests or correcting existing tests", "test"),
-}
 
 var (
 	red    = lipgloss.AdaptiveColor{Light: "#FE5F86", Dark: "#FE5F86"}
@@ -76,25 +65,38 @@ const (
 )
 
 type Model struct {
+	width  int
 	state  state
 	lg     *lipgloss.Renderer
 	styles *Styles
 	form   *huh.Form
-	width  int
+	commit *types.Commit
+	config config.LoadConfigReturn
 }
 
-func msgForm() *huh.Form {
+func msgForm(m *Model) *huh.Form {
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Key("type").
-				Options(DefaultPrefixes...).
+				Options(m.config.Prefixes...).
+				Value(&m.commit.Type).
 				Title("Type"),
 		),
 		huh.NewGroup(
 			huh.NewInput().
 				Key("scope").
+				Value(&m.commit.Scope).
 				Title("Scope"),
+		),
+		huh.NewGroup(
+			huh.NewConfirm().
+				Key("break").
+				Value(&m.commit.IsBreakingChange).
+				Title("Breaking Change").
+				Description("Is this a breaking change?").
+				Affirmative("Yes!").
+				Negative("Nope."),
 		),
 	).
 		WithWidth(45).
@@ -103,37 +105,17 @@ func msgForm() *huh.Form {
 }
 
 func mainForm(m *Model) *huh.Form {
-	var prefix string
-	if m.form.GetString("type") != "" {
-		prefix = m.form.GetString("type")
-	}
-
-	var scope string
-	if m.form.GetString("scope") != "" {
-		scope = m.form.GetString("scope")
-	}
-
-	formatMessage := fmt.Sprintf("%s(%s): ", prefix, scope)
-
 	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Key("message").
 				Title("Message").
-				Value(&formatMessage),
+				Value(&m.commit.Message),
 			huh.NewText().
 				Key("body").
 				Title("Body").
 				ShowLineNumbers(true).
 				Lines(8),
-		),
-		huh.NewGroup(
-			huh.NewConfirm().
-				Key("break").
-				Title("Breaking Change").
-				Description("Is this a breaking change?").
-				Affirmative("Yes!").
-				Negative("Nope."),
 		),
 		huh.NewGroup(
 			huh.NewConfirm().
@@ -154,12 +136,14 @@ func mainForm(m *Model) *huh.Form {
 		WithShowErrors(false)
 }
 
-func NewModel() Model {
+func NewModel(cfg config.LoadConfigReturn) Model {
 	m := Model{width: maxWidth}
+	m.commit = &types.Commit{}
 	m.lg = lipgloss.DefaultRenderer()
 	m.styles = NewStyles(m.lg)
+	m.config = cfg
 
-	m.form = msgForm()
+	m.form = msgForm(&m)
 	return m
 }
 
@@ -175,7 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c":
 			return m, tea.Interrupt
-		case "esc", "q":
+		case "esc":
 			return m, tea.Quit
 		}
 	}
@@ -192,7 +176,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case statusMessage:
 		if m.form.State == huh.StateCompleted {
+			commitMsg, err := template.RenderCommitMsg(m.config.MessageTemplate, m.commit)
+			if err != nil {
+				cmds = append(cmds, tea.Quit)
+				break
+			}
+
 			m.state = statusNormal
+			m.commit.Message = commitMsg
 			m.form = mainForm(&m)
 
 			cmds = append(cmds, m.form.Init())
@@ -270,9 +261,23 @@ func (m Model) appErrorBoundaryView(text string) string {
 }
 
 func main() {
-	_, err := tea.NewProgram(NewModel()).Run()
-	if err != nil {
-		fmt.Println("Oh no:", err)
+	if err := run(); err != nil {
+		fmt.Println("Error:", err)
 		os.Exit(1)
 	}
+}
+
+func run() error {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return err
+	}
+
+	p := tea.NewProgram(NewModel(cfg))
+
+	if _, err := p.Run(); err != nil {
+		return err
+	}
+
+	return nil
 }
