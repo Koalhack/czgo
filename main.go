@@ -70,7 +70,8 @@ func NewStyles(lg *lipgloss.Renderer) *Styles {
 type state int
 
 const (
-	statusNormal state = iota
+	statusMessage state = iota
+	statusNormal
 	stateDone
 )
 
@@ -82,36 +83,44 @@ type Model struct {
 	width  int
 }
 
-type message struct {
-	prefix string
-	scope  string
-}
-
-func NewModel() Model {
-	m := Model{width: maxWidth}
-	m.lg = lipgloss.DefaultRenderer()
-	m.styles = NewStyles(m.lg)
-
-	var message message
-
-	m.form = huh.NewForm(
+func msgForm() *huh.Form {
+	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Key("type").
-				Value(&message.prefix).
 				Options(DefaultPrefixes...).
 				Title("Type"),
 		),
 		huh.NewGroup(
 			huh.NewInput().
 				Key("scope").
-				Value(&message.scope).
 				Title("Scope"),
 		),
+	).
+		WithWidth(45).
+		WithShowHelp(false).
+		WithShowErrors(false)
+}
+
+func mainForm(m *Model) *huh.Form {
+	var prefix string
+	if m.form.GetString("type") != "" {
+		prefix = m.form.GetString("type")
+	}
+
+	var scope string
+	if m.form.GetString("scope") != "" {
+		scope = m.form.GetString("scope")
+	}
+
+	formatMessage := fmt.Sprintf("%s(%s): ", prefix, scope)
+
+	return huh.NewForm(
 		huh.NewGroup(
 			huh.NewInput().
 				Key("message").
-				Title("Message"),
+				Title("Message").
+				Value(&formatMessage),
 			huh.NewText().
 				Key("body").
 				Title("Body").
@@ -143,6 +152,14 @@ func NewModel() Model {
 		WithWidth(45).
 		WithShowHelp(false).
 		WithShowErrors(false)
+}
+
+func NewModel() Model {
+	m := Model{width: maxWidth}
+	m.lg = lipgloss.DefaultRenderer()
+	m.styles = NewStyles(m.lg)
+
+	m.form = msgForm()
 	return m
 }
 
@@ -172,9 +189,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	if m.form.State == huh.StateCompleted {
-		// Quit when the form is done.
-		cmds = append(cmds, tea.Quit)
+	switch m.state {
+	case statusMessage:
+		if m.form.State == huh.StateCompleted {
+			m.state = statusNormal
+			m.form = mainForm(&m)
+
+			cmds = append(cmds, m.form.Init())
+		}
+
+	case statusNormal:
+		if m.form.State == huh.StateCompleted {
+			m.state = stateDone
+
+			cmds = append(cmds, tea.Quit)
+		}
 	}
 
 	return m, tea.Batch(cmds...)
