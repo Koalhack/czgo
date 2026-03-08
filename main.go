@@ -12,6 +12,20 @@ import (
 
 const maxWidth = 80
 
+var DefaultPrefixes = []huh.Option[string]{
+	huh.NewOption("feat - a new feature", "feat"),
+	huh.NewOption("fix - a bug fix", "fix"),
+	huh.NewOption("build - changes that affect the build system or external dependencies", "build"),
+	huh.NewOption("chore - changes to the build process or auxiliary tools and libraries", "chore"),
+	huh.NewOption("ci - changes to our CI configuration files and scripts", "ci"),
+	huh.NewOption("docs - documentation only changes", "docs"),
+	huh.NewOption("perf - a code change that improves performance", "perf"),
+	huh.NewOption("refactor - a code change that neither fixes a bug nor adds a feature", "refactor"),
+	huh.NewOption("revert - reverts a previous commit", "revert"),
+	huh.NewOption("style - changes that do not affect the meaning of the code", "style"),
+	huh.NewOption("test - adding missing tests or correcting existing tests", "test"),
+}
+
 var (
 	red    = lipgloss.AdaptiveColor{Light: "#FE5F86", Dark: "#FE5F86"}
 	indigo = lipgloss.AdaptiveColor{Light: "#5A56E0", Dark: "#7571F9"}
@@ -68,28 +82,54 @@ type Model struct {
 	width  int
 }
 
+type message struct {
+	prefix string
+	scope  string
+}
+
 func NewModel() Model {
 	m := Model{width: maxWidth}
 	m.lg = lipgloss.DefaultRenderer()
 	m.styles = NewStyles(m.lg)
 
+	var message message
+
 	m.form = huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().
-				Key("class").
-				Options(huh.NewOptions("Warrior", "Mage", "Rogue")...).
-				Title("Choose your class").
-				Description("This will determine your department"),
-
-			huh.NewSelect[string]().
-				Key("level").
-				Options(huh.NewOptions("1", "20", "9999")...).
-				Title("Choose your level").
-				Description("This will determine your benefits package"),
-
+				Key("type").
+				Value(&message.prefix).
+				Options(DefaultPrefixes...).
+				Title("Type"),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Key("scope").
+				Value(&message.scope).
+				Title("Scope"),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Key("message").
+				Title("Message"),
+			huh.NewText().
+				Key("body").
+				Title("Body").
+				ShowLineNumbers(true).
+				Lines(8),
+		),
+		huh.NewGroup(
+			huh.NewConfirm().
+				Key("break").
+				Title("Breaking Change").
+				Description("Is this a breaking change?").
+				Affirmative("Yes!").
+				Negative("Nope."),
+		),
+		huh.NewGroup(
 			huh.NewConfirm().
 				Key("done").
-				Title("All done?").
+				Title("Ready to commit?").
 				Validate(func(v bool) error {
 					if !v {
 						return fmt.Errorf("Welp, finish up then")
@@ -108,13 +148,6 @@ func NewModel() Model {
 
 func (m Model) Init() tea.Cmd {
 	return m.form.Init()
-}
-
-func min(x, y int) int {
-	if x > y {
-		return y
-	}
-	return x
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -152,18 +185,9 @@ func (m Model) View() string {
 
 	switch m.form.State {
 	case huh.StateCompleted:
-		title, role := m.getRole()
-		title = s.Highlight.Render(title)
 		var b strings.Builder
-		fmt.Fprintf(&b, "Congratulations, you’re Charm’s newest\n%s!\n\n", title)
-		fmt.Fprintf(&b, "Your job description is as follows:\n\n%s\n\nPlease proceed to HR immediately.", role)
 		return s.Status.Margin(0, 1).Padding(1, 2).Width(48).Render(b.String()) + "\n\n"
 	default:
-
-		var class string
-		if m.form.GetString("class") != "" {
-			class = "Class: " + m.form.GetString("class")
-		}
 
 		// Form (left side)
 		v := strings.TrimSuffix(m.form.View(), "\n\n")
@@ -171,35 +195,6 @@ func (m Model) View() string {
 
 		// Status (right side)
 		var status string
-		{
-			var (
-				buildInfo      = "(None)"
-				role           string
-				jobDescription string
-				level          string
-			)
-
-			if m.form.GetString("level") != "" {
-				level = "Level: " + m.form.GetString("level")
-				role, jobDescription = m.getRole()
-				role = "\n\n" + s.StatusHeader.Render("Projected Role") + "\n" + role
-				jobDescription = "\n\n" + s.StatusHeader.Render("Duties") + "\n" + jobDescription
-			}
-			if m.form.GetString("class") != "" {
-				buildInfo = fmt.Sprintf("%s\n%s", class, level)
-			}
-
-			const statusWidth = 28
-			statusMarginLeft := m.width - statusWidth - lipgloss.Width(form) - s.Status.GetMarginRight()
-			status = s.Status.
-				Height(lipgloss.Height(form)).
-				Width(statusWidth).
-				MarginLeft(statusMarginLeft).
-				Render(s.StatusHeader.Render("Current Build") + "\n" +
-					buildInfo +
-					role +
-					jobDescription)
-		}
 
 		errors := m.form.Errors()
 		header := m.appBoundaryView("Charm Employment Application")
@@ -243,41 +238,6 @@ func (m Model) appErrorBoundaryView(text string) string {
 		lipgloss.WithWhitespaceChars("/"),
 		lipgloss.WithWhitespaceForeground(red),
 	)
-}
-
-func (m Model) getRole() (string, string) {
-	level := m.form.GetString("level")
-	switch m.form.GetString("class") {
-	case "Warrior":
-		switch level {
-		case "1":
-			return "Tank Intern", "Assists with tank-related activities. Paid position."
-		case "9999":
-			return "Tank Manager", "Manages tanks and tank-related activities."
-		default:
-			return "Tank", "General tank. Does damage, takes damage. Responsible for tanking."
-		}
-	case "Mage":
-		switch level {
-		case "1":
-			return "DPS Associate", "Finds DPS deals and passes them on to DPS Manager."
-		case "9999":
-			return "DPS Operating Officer", "Oversees all DPS activities."
-		default:
-			return "DPS", "Does damage and ideally does not take damage. Logs hours in JIRA."
-		}
-	case "Rogue":
-		switch level {
-		case "1":
-			return "Stealth Junior Designer", "Designs rogue-like activities. Reports to Stealth Lead."
-		case "9999":
-			return "Stealth Lead", "Lead designer for all things stealth. Some travel required."
-		default:
-			return "Sneaky Person", "Sneaks around and does sneaky things. Reports to Stealth Lead."
-		}
-	default:
-		return "", ""
-	}
 }
 
 func main() {
